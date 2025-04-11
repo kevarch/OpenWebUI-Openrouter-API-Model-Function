@@ -14,6 +14,7 @@ from typing import List, Union, Generator, Iterator
 from pydantic import BaseModel, Field
 
 
+# --- Helper function (unchanged) ---
 def _insert_citations(text: str, citations: list[str]) -> str:
     """
     Replace citation markers [n] in text with markdown links to the corresponding citation URLs.
@@ -25,26 +26,17 @@ def _insert_citations(text: str, citations: list[str]) -> str:
     Returns:
         Text with citation markers replaced with markdown links
     """
-    # Define regex pattern for citation markers [n]
     pattern = r"\[(\d+)\]"
 
     def replace_citation(match_obj):
-        # Extract the number from the match
         num = int(match_obj.group(1))
-
-        # Check if there's a corresponding citation URL
-        # Citations are 0-indexed in the list, but 1-indexed in the text
         if 1 <= num <= len(citations):
             url = citations[num - 1]
-            # Return Markdown link: [url]([n])
             return f"[{match_obj.group(0)}]({url})"
         else:
-            # If no corresponding citation, return the original marker
             return match_obj.group(0)
 
-    # Replace all citation markers in the text
     result = re.sub(pattern, replace_citation, text)
-
     return result
 
 
@@ -86,12 +78,10 @@ class Pipe:
 
             models_data = response.json()
 
-            # Extract model information
             models = []
             for model in models_data.get("data", []):
                 model_id = model.get("id")
                 if model_id:
-                    # Use model name or ID, with optional prefix
                     model_name = model.get("name", model_id)
                     prefix = self.valves.MODEL_PREFIX
                     models.append(
@@ -109,36 +99,26 @@ class Pipe:
 
     def pipe(self, body: dict) -> Union[str, Generator, Iterator]:
         """Process the request and handle reasoning tokens if supported"""
-        # Clone the body for OpenRouter
         payload = body.copy()
-
-        # Print incoming body for debugging
         print(f"Original request body: {json.dumps(body)[:500]}...")
 
-        # Make sure the model ID is properly extracted from the pipe format
         if "model" in payload and payload["model"] and "." in payload["model"]:
-            # Extract the model ID from the format like "openrouter.model-id"
             payload["model"] = payload["model"].split(".", 1)[1]
             print(f"Extracted model ID: {payload['model']}")
 
-        # Add include_reasoning parameter if enabled
         if self.valves.INCLUDE_REASONING:
             payload["include_reasoning"] = True
 
-        # Set up headers
         headers = {
             "Authorization": f"Bearer {self.valves.OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
         }
 
-        # Add HTTP-Referer and X-Title if provided
-        # These help identify your app on OpenRouter
         if body.get("http_referer"):
             headers["HTTP-Referer"] = body["http_referer"]
         if body.get("x_title"):
             headers["X-Title"] = body["x_title"]
 
-        # Default headers for identifying the app to OpenRouter
         if "HTTP-Referer" not in headers:
             headers["HTTP-Referer"] = "https://openwebui.com/"
         if "X-Title" not in headers:
@@ -148,9 +128,11 @@ class Pipe:
 
         try:
             if body.get("stream", False):
-                return self.stream_response(url, headers, payload)
+                # Pass the helper function as an argument
+                return self.stream_response(url, headers, payload, _insert_citations)
             else:
-                return self.non_stream_response(url, headers, payload)
+                # Pass the helper function as an argument
+                return self.non_stream_response(url, headers, payload, _insert_citations)
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {e}")
             return f"Error: Request failed: {e}"
@@ -158,7 +140,7 @@ class Pipe:
             print(f"Error in pipe method: {e}")
             return f"Error: {e}"
 
-    def non_stream_response(self, url, headers, payload):
+    def non_stream_response(self, url, headers, payload, citation_inserter):
         """Handle non-streaming responses and wrap reasoning in <think> tags if present"""
         try:
             print(
@@ -183,43 +165,65 @@ class Pipe:
                     print(f"Failed to parse error response: {e}")
                     error_message += f": {response.text[:500]}"
 
-                # Log request payload for debugging
                 print(f"Request that caused error: {json.dumps(payload)}")
                 raise Exception(error_message)
 
             res = response.json()
             print(f"OpenRouter response keys: {list(res.keys())}")
 
-            # Check if we have choices in the response
             if not res.get("choices") or len(res["choices"]) == 0:
                 return ""
 
-            # Extract content and reasoning if present
             choice = res["choices"][0]
             message = choice.get("message", {})
+            citations = res.get("citations") or [] # Get citations if present
 
-            # Debug output
             print(f"Message keys: {list(message.keys())}")
 
-            content = message.get("content", "")
-            reasoning = message.get("reasoning", "")
+            content = message.get("content") # Get content, might be None
+            reasoning = message.get("reasoning") # Get reasoning, might be None
+
+            # Explicitly check for None and default to empty string
+            if content is None:
+                content = ""
+            if reasoning is None:
+                reasoning = ""
 
             print(f"Found reasoning: {bool(reasoning)} ({len(reasoning)} chars)")
             print(f"Found content: {bool(content)} ({len(content)} chars)")
 
-            # If we have both reasoning and content
-            if reasoning and content:
-                return f"<think>\n{reasoning}\n</think>\n\n{content}"
-            elif reasoning:  # Only reasoning, no content (unusual)
-                return f"<think>\n{reasoning}\n</think>\n\n"
-            elif content:  # Only content, no reasoning
-                return content
-            return ""
+            # Insert citations into content and reasoning
+            content_with_citations = citation_inserter(content, citations)
+            reasoning_with_citations = citation_inserter(reasoning, citations)
+
+            # Combine reasoning and content
+            if reasoning_with_citations and content_with_citations:
+                # Add citation list at the end if citations exist
+                citation_list_str = ""
+                if citations:
+                    citation_list = [f"{i+1}. {url}" for i, url in enumerate(citations)]
+                    citation_list_str = "\n\n---\nCitations:\n" + "\n".join(citation_list)
+
+                return f"<think>\n{reasoning_with_citations}\n</think>\n\n{content_with_citations}{citation_list_str}"
+            elif reasoning_with_citations:
+                return f"<think>\n{reasoning_with_citations}\n</think>\n\n"
+            elif content_with_citations:
+                 # Add citation list at the end if citations exist
+                citation_list_str = ""
+                if citations:
+                    citation_list = [f"{i+1}. {url}" for i, url in enumerate(citations)]
+                    citation_list_str = "\n\n---\nCitations:\n" + "\n".join(citation_list)
+                return f"{content_with_citations}{citation_list_str}"
+
+            return "" # Return empty string if neither content nor reasoning exists
         except Exception as e:
+            # Print traceback for better debugging
+            import traceback
+            traceback.print_exc()
             print(f"Error in non_stream_response: {e}")
             return f"Error: {e}"
 
-    def stream_response(self, url, headers, payload):
+    def stream_response(self, url, headers, payload, citation_inserter):
         """Stream reasoning tokens in real-time with proper tag management"""
         try:
             response = requests.post(
@@ -229,19 +233,29 @@ class Pipe:
             if response.status_code != 200:
                 error_message = f"HTTP Error {response.status_code}"
                 try:
-                    error_data = response.json()
-                    error_message += (
-                        f": {error_data.get('error', {}).get('message', '')}"
-                    )
-                except:
-                    pass
+                    # Try to read the error response body
+                    error_text = response.text
+                    print(f"Error response body: {error_text[:500]}") # Log the first 500 chars
+                    error_data = json.loads(error_text) # Try parsing after reading
+                    error_detail = error_data.get('error', {}).get('message', '')
+                    if error_detail:
+                         error_message += f": {error_detail}"
+                    elif error_text:
+                         error_message += f": {error_text[:200]}" # Add raw text if no structured error
+                except json.JSONDecodeError:
+                     error_message += f": {response.text[:200]}" # Add raw text if JSON parsing fails
+                except Exception as e:
+                    print(f"Failed to fully parse error response: {e}")
+                    error_message += f": {response.text[:200]}" # Fallback
+
+                print(f"Request that caused error: {json.dumps(payload)}")
                 raise Exception(error_message)
 
-            # State tracking
-            in_reasoning_state = False  # True if we've output the opening <think> tag
-            latest_citations = []  # The latest citations list
 
-            # Process the response stream
+            in_reasoning_state = False
+            latest_citations = []
+            buffer = "" # Buffer to accumulate text before processing citations
+
             for line in response.iter_lines():
                 if not line:
                     continue
@@ -250,65 +264,90 @@ class Pipe:
                 if not line_text.startswith("data: "):
                     continue
                 elif line_text == "data: [DONE]":
+                    # Process any remaining buffer content with the latest citations
+                    if buffer:
+                        yield citation_inserter(buffer, latest_citations)
+                        buffer = "" # Clear buffer
+
+                    # Add final citation list if needed
                     if latest_citations:
-                        citation_list = [f"1. {l}" for l in latest_citations]
+                        citation_list = [f"{i+1}. {url}" for i, url in enumerate(latest_citations)]
                         citation_list_str = "\n".join(citation_list)
                         yield f"\n\n---\nCitations:\n{citation_list_str}"
-                    continue
+                    break # Exit the loop cleanly
 
                 try:
-                    chunk = json.loads(line_text[6:])
+                    chunk_data = line_text[6:]
+                    # Handle potential empty data chunks if API sends "data: \n"
+                    if not chunk_data.strip():
+                        continue
+                    chunk = json.loads(chunk_data)
 
                     if "choices" in chunk and chunk["choices"]:
                         choice = chunk["choices"][0]
-                        citations = chunk.get("citations") or []
+                        # Update citations if present in the chunk
+                        chunk_citations = chunk.get("citations")
+                        if chunk_citations is not None: # Check specifically for None
+                             latest_citations = chunk_citations
 
-                        # Update the citation list
-                        if citations:
-                            latest_citations = citations
+                        delta = choice.get("delta", {})
+                        message = choice.get("message", {}) # Handle non-delta messages too
 
-                        # Check for reasoning tokens
-                        reasoning_text = None
-                        if "delta" in choice and "reasoning" in choice["delta"]:
-                            reasoning_text = choice["delta"]["reasoning"]
-                        elif "message" in choice and "reasoning" in choice["message"]:
-                            reasoning_text = choice["message"]["reasoning"]
+                        reasoning_text = delta.get("reasoning") if delta else message.get("reasoning")
+                        content_text = delta.get("content") if delta else message.get("content")
 
-                        # Check for content tokens
-                        content_text = None
-                        if "delta" in choice and "content" in choice["delta"]:
-                            content_text = choice["delta"]["content"]
-                        elif "message" in choice and "content" in choice["message"]:
-                            content_text = choice["message"]["content"]
+                        # --- FIX: Ensure None is treated as empty string ---
+                        reasoning_text = reasoning_text if reasoning_text is not None else ""
+                        content_text = content_text if content_text is not None else ""
+                        # --- END FIX ---
+
 
                         # Handle reasoning tokens
                         if reasoning_text:
-                            # If first reasoning token, output opening tag
                             if not in_reasoning_state:
+                                # Process buffer before starting <think> tag
+                                if buffer:
+                                    yield citation_inserter(buffer, latest_citations)
+                                    buffer = ""
                                 yield "<think>\n"
                                 in_reasoning_state = True
-
-                            # Output the reasoning token
-                            yield _insert_citations(reasoning_text, citations)
+                            # Append reasoning text to buffer
+                            buffer += reasoning_text
 
                         # Handle content tokens
                         if content_text:
-                            # If transitioning from reasoning to content, close the thinking tag
                             if in_reasoning_state:
+                                # Process buffer (reasoning) before closing </think> tag
+                                if buffer:
+                                     yield citation_inserter(buffer, latest_citations)
+                                     buffer = ""
                                 yield "\n</think>\n\n"
                                 in_reasoning_state = False
+                            # Append content text to buffer
+                            buffer += content_text
 
-                            # Output the content
-                            if content_text:
-                                yield _insert_citations(content_text, citations)
-
+                except json.JSONDecodeError:
+                    print(f"Skipping invalid JSON line: {line_text}")
                 except Exception as e:
-                    print(f"Error processing chunk: {e}")
+                    print(f"Error processing chunk: {e} - Line: {line_text}")
+                    import traceback
+                    traceback.print_exc()
 
-            # If we're still in reasoning state at the end, close the tag
+
+            # If we end while still in reasoning state, close the tag and process buffer
             if in_reasoning_state:
-                yield "\n</think>\n\n"
+                 if buffer:
+                     yield citation_inserter(buffer, latest_citations) # Process remaining reasoning
+                     buffer = ""
+                 yield "\n</think>\n\n"
+            # Process any remaining buffer content (could be content if stream ends abruptly)
+            elif buffer:
+                 yield citation_inserter(buffer, latest_citations)
+
 
         except Exception as e:
             print(f"Error in stream_response: {e}")
-            yield f"Error: {e}"
+            import traceback
+            traceback.print_exc()
+            # Yield the error message to the client
+            yield f"Error: An error occurred during streaming - {e}"
