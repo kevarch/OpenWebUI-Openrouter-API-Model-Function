@@ -4,6 +4,8 @@ This pipe integrates the [OpenRouter.ai](https://openrouter.ai/) API with [OpenW
 
 It acts as a bridge, fetching the list of available models from OpenRouter and forwarding chat requests from OpenWebUI to the selected OpenRouter model, handling both streaming and non-streaming responses.
 
+Getting started with OpenRouter is straightforward: simply sign up on their website at [OpenRouter.ai](https://openrouter.ai/), add some credits, and generate an API key to use with this function.
+
 ## Features
 
 * **Access to Diverse Models:** Leverages the OpenRouter API to provide access to numerous LLMs from various providers.
