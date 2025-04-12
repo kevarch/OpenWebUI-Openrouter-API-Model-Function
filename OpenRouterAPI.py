@@ -1,12 +1,11 @@
 """
-title: OpenRouter API Model Pipe
-version: 0.1.4
-license: MIT
-description: Adds support for OpenRouter, including citations and reasoning tokens
+title: OpenRouter Integration for OpenWebUI
+version: 0.2.0
+description: Access the full suite of OpenRouter models directly within OpenWebUI with support for citations and reasoning tokens.
 author: kevarch
 author_url: https://github.com/kevarch
-forked from author: rburmorrison
-forked from author_url: https://github.com/rburmorrison
+credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5
+license: MIT
 """
 
 import re
