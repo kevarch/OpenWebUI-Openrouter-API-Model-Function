@@ -1,6 +1,6 @@
 """
 title: OpenRouter Integration for OpenWebUI
-version: 0.2.0
+version: 0.3.0
 description: Access the full suite of OpenRouter models directly within OpenWebUI with support for citations and reasoning tokens.
 author: kevarch
 author_url: https://github.com/kevarch
@@ -101,6 +101,14 @@ class Pipe:
             description="Timeout for API requests in seconds.",
             gt=0 # Ensure timeout is positive
         )
+        MODEL_PROVIDERS: str = Field(
+            default="",
+            description="Comma-separated list of model providers to include or exclude. Leave empty to include all providers."
+        )
+        INVERT_PROVIDER_LIST: bool = Field(
+            default=False,
+            description="If true, the above 'Model Providers' list becomes an *exclude* list instead of an *include* list."
+        )
 
     def __init__(self):
         self.type = "manifold"  # Specifies this pipe provides multiple models
@@ -131,21 +139,51 @@ class Pipe:
 
             models_data = response.json()
             models = []
-            for model in models_data.get("data", []):
+            raw_models_data = models_data.get("data", [])
+
+            # --- Provider Filtering Logic ---
+            provider_list_str = self.valves.MODEL_PROVIDERS.lower()
+            invert_list = self.valves.INVERT_PROVIDER_LIST
+            target_providers = {
+                p.strip() for p in provider_list_str.split(",") if p.strip()
+            }
+            # --- End Filtering Logic ---
+
+            for model in raw_models_data:
                 model_id = model.get("id")
-                if model_id:
-                    model_name = model.get("name", model_id) # Use name, fallback to id
-                    prefix = self.valves.MODEL_PREFIX
-                    models.append(
-                        {
-                            "id": model_id, # The actual ID OpenRouter expects
-                            # Display name in OpenWebUI, potentially prefixed
-                            "name": f"{prefix}{model_name}" if prefix else model_name,
-                        }
-                    )
+                if not model_id:
+                    continue # Skip models without an ID
+
+                # --- Apply Provider Filtering ---
+                if target_providers: # Only filter if the list is not empty
+                    provider = model_id.split("/", 1)[0].lower() if "/" in model_id else model_id.lower()
+                    provider_in_list = provider in target_providers
+
+                    # Determine if we should keep the model based on include/exclude logic
+                    keep = (provider_in_list and not invert_list) or \
+                           (not provider_in_list and invert_list)
+
+                    if not keep:
+                        continue # Skip this model if it doesn't match the filter
+                # --- End Filtering ---
+
+                # If we reach here, the model is kept (either no filter or passed filter)
+                model_name = model.get("name", model_id) # Use name, fallback to id
+                prefix = self.valves.MODEL_PREFIX
+                models.append(
+                    {
+                        "id": model_id, # The actual ID OpenRouter expects
+                        # Display name in OpenWebUI, potentially prefixed
+                        "name": f"{prefix}{model_name}" if prefix else model_name,
+                    }
+                )
 
             if not models:
-                 return [{"id": "error", "name": "Pipe Error: No models found on OpenRouter"}]
+                 # Adjust error message if filtering might be the cause
+                 if target_providers:
+                     return [{"id": "error", "name": "Pipe Error: No models found matching the provider filter"}]
+                 else:
+                     return [{"id": "error", "name": "Pipe Error: No models found on OpenRouter"}]
 
             return models
 
