@@ -9,7 +9,9 @@ Getting started with OpenRouter is straightforward: simply sign up on their webs
 ## Features
 
 * **Access to Diverse Models:** Leverages the OpenRouter API to provide access to numerous LLMs from various providers.
-* **Model Discovery:** Automatically fetches and lists available OpenRouter models within OpenWebUI. New models will appear in OpenWebUI as new models are released on OpenRouter.
+* **Model Discovery:** Automatically fetches and lists available OpenRouter models within OpenWebUI. 
+    * New models will appear in OpenWebUI as new models are released on OpenRouter.
+    * Optionally specify a list of providers to include or exclude from the available OpenRouter models. This is useful if you want to exclude providers you already have integrated in OpenWebUI, such as OpenAI, or only wish to add specific providers.
 * **Optional Model Prefix:** Allows adding a custom prefix (e.g., "OR: ") to model names in the OpenWebUI list for easy identification.
 * **Streaming & Non-Streaming Support:** Handles both response types seamlessly.
 * **Citation Support:**
@@ -45,6 +47,8 @@ The following settings can be configured via the OpenWebUI Pipe settings interfa
 * **`INCLUDE_REASONING`** (Default: `True`): Whether to request reasoning tokens from models that support them. If enabled, reasoning appears within `<think>` tags.
 * **`MODEL_PREFIX`** (Default: `""`): An optional text prefix added to the names of OpenRouter models displayed in OpenWebUI (e.g., setting it to `OR: ` will show models like `OR: xAI: Grok 3 Beta`).
 * **`REQUEST_TIMEOUT`** (Default: `90`): The maximum time (in seconds) to wait for a response from the OpenRouter API before timing out.
+* **`MODEL_PROVIDERS`** Optional list of comma-separated model providers to include or exclude. Leave empty to include all providers.
+* **`INVERT_PROVIDER_LIST`** If true, the 'Model Providers' list becomes an *exclude* list instead of an *include* list.
 
 ## Usage
 
