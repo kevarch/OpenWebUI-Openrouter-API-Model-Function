@@ -11,7 +11,7 @@ Getting started with OpenRouter is straightforward: simply sign up on their webs
 * **Access to Diverse Models:** Leverages the OpenRouter API to provide access to numerous LLMs from various providers.
 * **Model Discovery:** Automatically fetches and lists available OpenRouter models within OpenWebUI. 
     * New models will appear in OpenWebUI as new models are released on OpenRouter.
-    * Optionally specify a list of providers to include or exclude from the available OpenRouter models.
+    * Optionally specify a list of providers to include or exclude from the available OpenRouter models. This is useful if you want to exclude providers you already have integrated in OpenWebUI, such as OpenAI, or only wish to add specific providers.
 * **Optional Model Prefix:** Allows adding a custom prefix (e.g., "OR: ") to model names in the OpenWebUI list for easy identification.
 * **Streaming & Non-Streaming Support:** Handles both response types seamlessly.
 * **Citation Support:**
