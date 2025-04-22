@@ -1,7 +1,7 @@
 """
 title: OpenRouter Integration for OpenWebUI
-version: 0.3.0
-description: Access the full suite of OpenRouter models directly within OpenWebUI with support for citations and reasoning tokens.
+version: 0.4.0
+description: Access the full suite of OpenRouter models directly within OpenWebUI with support for citations, reasoning tokens, and optional prompt caching.
 author: kevarch
 author_url: https://github.com/kevarch
 credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5
@@ -108,6 +108,10 @@ class Pipe:
         INVERT_PROVIDER_LIST: bool = Field(
             default=False,
             description="If true, the above 'Model Providers' list becomes an *exclude* list instead of an *include* list."
+        )
+        ENABLE_CACHE_CONTROL: bool = Field(
+            default=False,
+            description="Enable OpenRouter prompt caching by adding 'cache_control' to potentially large message parts. May reduce costs for supported models (e.g., Anthropic, Gemini) on subsequent calls with the same cached prefix. See OpenRouter docs for details.",
         )
 
     def __init__(self):
@@ -240,6 +244,67 @@ class Pipe:
                 # Assuming format "some_prefix.actual-model-id"
                 payload["model"] = payload["model"].split(".", 1)[1]
                 # print(f"Extracted model ID: {payload['model']}") # Optional: for debugging
+
+            # --- Apply Cache Control Logic ---
+            if self.valves.ENABLE_CACHE_CONTROL and "messages" in payload:
+                try:
+                    cache_applied = False
+                    messages = payload["messages"]
+
+                    # 1. Try applying to System Message
+                    system_message_index = -1
+                    for i, msg in enumerate(messages):
+                        if msg.get("role") == "system":
+                            system_message_index = i
+                            break
+
+                    if system_message_index != -1:
+                        system_msg = messages[system_message_index]
+                        if isinstance(system_msg.get("content"), list):
+                            longest_text_part_index = -1
+                            max_len = -1
+                            for j, part in enumerate(system_msg["content"]):
+                                if part.get("type") == "text":
+                                    text_len = len(part.get("text", ""))
+                                    if text_len > max_len:
+                                        max_len = text_len
+                                        longest_text_part_index = j
+                            if longest_text_part_index != -1:
+                                # Add cache control to the longest text part
+                                system_msg["content"][longest_text_part_index]["cache_control"] = {"type": "ephemeral"}
+                                cache_applied = True
+                                # print(f"DEBUG: Applied cache_control to system message part {longest_text_part_index}") # Optional Debug
+
+                    # 2. If not applied, try applying to the Last User Message
+                    if not cache_applied:
+                        last_user_message_index = -1
+                        for i in range(len(messages) - 1, -1, -1):
+                             if messages[i].get("role") == "user":
+                                 last_user_message_index = i
+                                 break
+
+                        if last_user_message_index != -1:
+                            user_msg = messages[last_user_message_index]
+                            if isinstance(user_msg.get("content"), list):
+                                longest_text_part_index = -1
+                                max_len = -1
+                                for j, part in enumerate(user_msg["content"]):
+                                    if part.get("type") == "text":
+                                        text_len = len(part.get("text", ""))
+                                        if text_len > max_len:
+                                            max_len = text_len
+                                            longest_text_part_index = j
+                                if longest_text_part_index != -1:
+                                    # Add cache control to the longest text part
+                                    user_msg["content"][longest_text_part_index]["cache_control"] = {"type": "ephemeral"}
+                                    # print(f"DEBUG: Applied cache_control to last user message part {longest_text_part_index}") # Optional Debug
+
+                except Exception as cache_err:
+                    # Log error but don't stop the request
+                    print(f"Warning: Error applying cache_control logic: {cache_err}")
+                    traceback.print_exc() # Print detailed traceback for debugging
+            # --- End Cache Control Logic ---
+
 
             # Add include_reasoning parameter if the valve is enabled
             if self.valves.INCLUDE_REASONING:

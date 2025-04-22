@@ -23,6 +23,7 @@ Getting started with OpenRouter is straightforward: simply sign up on their webs
     * Wraps reasoning output in `<think>...</think>` tags for clear separation in the UI.
 * **Configurable Timeout:** Set a custom timeout for API requests to OpenRouter.
 * **Error Handling:** Provides informative error messages in the UI for common issues like invalid API keys, network timeouts, or API errors.
+* **Optional Prompt Caching:** Allows enabling OpenRouter's prompt caching feature (`cache_control`) for potentially reduced costs on subsequent requests with the same initial prompt structure (supported by models like Anthropic Claude and Google Gemini).
 
 ## Installation
 
@@ -49,6 +50,7 @@ The following settings can be configured via the OpenWebUI Pipe settings interfa
 * **`REQUEST_TIMEOUT`** (Default: `90`): The maximum time (in seconds) to wait for a response from the OpenRouter API before timing out.
 * **`MODEL_PROVIDERS`** Optional list of comma-separated model providers to include or exclude. Leave empty to include all providers.
 * **`INVERT_PROVIDER_LIST`** If true, the 'Model Providers' list becomes an *exclude* list instead of an *include* list.
+* **`ENABLE_CACHE_CONTROL`** (Default: `False`): If `True`, this enables OpenRouter's prompt caching, potentially reducing costs for supported models on repeated requests with similar initial prompts and repeated context. See OpenRouter documentation for model compatibility and details.
 
 ## Usage
 
