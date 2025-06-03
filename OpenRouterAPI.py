@@ -9,6 +9,9 @@ credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5, 
 license: MIT
 
 Changelog:
+- Version 0.4.3:
+  * Contribution by Scythe Eden
+  * Added MODEL_PROVIDER_BLACKLIST parameter and logic to filter models by specific model IDs.
 - Version 0.4.2:
   * Contribution by Scythe Eden
   * Added MODEL_WHITELIST parameter to filter models by specific model IDs.
