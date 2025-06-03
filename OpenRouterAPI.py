@@ -4,11 +4,19 @@ version: 0.4.1
 description: Integration with OpenRouter for OpenWebUI with Free Model Filtering and optional field improvements
 author: kevarch
 author_url: https://github.com/kevarch
-contributor: Eloi Marques da Silva (https://github.com/eloimarquessilva)
-credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5
+contributors: Eloi Marques da Silva (https://github.com/eloimarquessilva), Scythe Eden https://github.com/DarkEden-coding
+credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5, Claude 4 Sonnet
 license: MIT
 
 Changelog:
+- Version 0.4.2:
+  * Contribution by Scythe Eden
+  * Added MODEL_WHITELIST parameter to filter models by specific model IDs.
+  * Added pricing information display in model names format: ($input, $output) $total (per 1M tokens).
+  * Added REASONING_EFFORT parameter to control reasoning token allocation (high, medium, low).
+  * Implemented dynamic reasoning effort detection from the first word of user messages.
+  * Added a Markdown-formatted effort notification at the beginning of the returned message.
+  * Automatically removes the effort keyword from the user's message after detection.
 - Version 0.4.1:
   * Contribution by Eloi Marques da Silva
   * Added FREE_ONLY parameter to optionally filter and display only free models in OpenWebUI.
@@ -81,6 +89,116 @@ def _format_citation_list(citations: list[str]) -> str:
         return ""
 
 
+# --- Helper function for pricing formatting ---
+def _format_pricing(model_data: dict) -> str:
+    """
+    Format pricing information from model data.
+
+    Args:
+        model_data: Model data from OpenRouter API
+
+    Returns:
+        Formatted pricing string like "($0.15, $0.60) $0.75" or empty string if no pricing
+    """
+    try:
+        pricing = model_data.get("pricing", {})
+        if not pricing:
+            return ""
+
+        prompt_price = pricing.get("prompt")
+        completion_price = pricing.get("completion")
+
+        if prompt_price is None or completion_price is None:
+            return ""
+
+        # Convert from per-token to per-1M tokens for readability
+        prompt_per_1m = float(prompt_price) * 1_000_000
+        completion_per_1m = float(completion_price) * 1_000_000
+        total_per_1m = prompt_per_1m + completion_per_1m
+
+        return f" (${prompt_per_1m:.2f}, ${completion_per_1m:.2f}) ${total_per_1m:.2f}"
+
+    except (ValueError, TypeError, AttributeError) as e:
+        print(
+            f"Error formatting pricing for model {model_data.get('id', 'unknown')}: {e}"
+        )
+        return ""
+
+
+# --- Helper function for effort detection and message processing ---
+def _process_effort_from_message(
+    messages: list, default_effort: str
+) -> tuple[str, str]:
+    """
+    Process messages to detect effort level from first word and return effort + notification.
+
+    Args:
+        messages: List of messages from the request
+        default_effort: Default effort level from settings
+
+    Returns:
+        Tuple of (effort_level, effort_notification_text)
+    """
+    if not messages:
+        return default_effort, ""
+
+    # Find the last user message
+    last_user_message = None
+    last_user_index = -1
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            last_user_message = messages[i]
+            last_user_index = i
+            break
+
+    if not last_user_message:
+        return default_effort, ""
+
+    # Extract content - handle both string and list formats
+    content = last_user_message.get("content", "")
+    if isinstance(content, list):
+        # Find first text content
+        text_content = ""
+        for part in content:
+            if part.get("type") == "text":
+                text_content = part.get("text", "")
+                break
+        content = text_content
+
+    if not isinstance(content, str) or not content.strip():
+        return default_effort, ""
+
+    # Check if first word is an effort level
+    words = content.strip().split()
+    if not words:
+        return default_effort, ""
+
+    first_word = words[0].lower()
+    valid_efforts = ["high", "medium", "low"]
+
+    if first_word in valid_efforts:
+        # Remove the effort word from the message
+        remaining_text = " ".join(words[1:]).strip()
+
+        # Update the message content
+        if isinstance(last_user_message["content"], list):
+            # Update the text part in the list
+            for part in last_user_message["content"]:
+                if part.get("type") == "text":
+                    part["text"] = remaining_text
+                    break
+        else:
+            # Update string content
+            messages[last_user_index]["content"] = remaining_text
+
+        # Create effort notification using Markdown
+        effort_notification = f"> *Reasoning set to {first_word}*\n\n"
+
+        return first_word, effort_notification
+
+    return default_effort, ""
+
+
 # --- Main Pipe class ---
 class Pipe:
     class Valves(BaseModel):
@@ -91,6 +209,10 @@ class Pipe:
         INCLUDE_REASONING: bool = Field(
             default=True,
             description="Request reasoning tokens from models that support it.",
+        )
+        REASONING_EFFORT: str = Field(
+            default="medium",
+            description="Default reasoning effort level: 'high' (~80% tokens), 'medium' (~50% tokens), 'low' (~20% tokens). Can be overridden by starting message with effort level.",
         )
         MODEL_PREFIX: Optional[str] = Field(
             default=None,
@@ -110,6 +232,10 @@ class Pipe:
             default=False,
             description="If true, the above 'Model Providers' list becomes an *exclude* list instead of an *include* list.",
         )
+        MODEL_WHITELIST: Optional[str] = Field(
+            default=None,
+            description="Comma-separated list of specific model IDs to include. If set, only these models will be available. Leave empty to use provider filtering instead.",
+        )
         ENABLE_CACHE_CONTROL: bool = Field(
             default=False,
             description="Enable OpenRouter prompt caching by adding 'cache_control' to potentially large message parts. May reduce costs for supported models (e.g., Anthropic, Gemini) on subsequent calls with the same cached prefix. See OpenRouter docs for details.",
@@ -117,6 +243,10 @@ class Pipe:
         FREE_ONLY: bool = Field(
             default=False,
             description="If true, only free models will be available.",
+        )
+        SHOW_PRICING: bool = Field(
+            default=True,
+            description="If true, show pricing information in model names (per 1M tokens).",
         )
 
     def __init__(self):
@@ -148,6 +278,16 @@ class Pipe:
             raw_models_data = models_data.get("data", [])
             models: List[dict] = []
 
+            # --- Whitelist Filtering Logic ---
+            whitelist_str = (self.valves.MODEL_WHITELIST or "").strip()
+            whitelist_models = set()
+            if whitelist_str:
+                whitelist_models = {
+                    model_id.strip().lower()
+                    for model_id in whitelist_str.split(",")
+                    if model_id.strip()
+                }
+
             # --- Provider Filtering Logic ---
             provider_list_str = (self.valves.MODEL_PROVIDERS or "").lower()
             invert_list = self.valves.INVERT_PROVIDER_LIST
@@ -161,19 +301,24 @@ class Pipe:
                 if not model_id:
                     continue
 
-                # Apply Provider Filtering
-                if target_providers:
-                    provider = (
-                        model_id.split("/", 1)[0].lower()
-                        if "/" in model_id
-                        else model_id.lower()
-                    )
-                    provider_in_list = provider in target_providers
-                    keep = (provider_in_list and not invert_list) or (
-                        not provider_in_list and invert_list
-                    )
-                    if not keep:
+                # Apply Whitelist Filtering (takes precedence over provider filtering)
+                if whitelist_models:
+                    if model_id.lower() not in whitelist_models:
                         continue
+                else:
+                    # Apply Provider Filtering only if no whitelist is set
+                    if target_providers:
+                        provider = (
+                            model_id.split("/", 1)[0].lower()
+                            if "/" in model_id
+                            else model_id.lower()
+                        )
+                        provider_in_list = provider in target_providers
+                        keep = (provider_in_list and not invert_list) or (
+                            not provider_in_list and invert_list
+                        )
+                        if not keep:
+                            continue
 
                 # Apply Free Only Filtering
                 if self.valves.FREE_ONLY and "free" not in model_id.lower():
@@ -181,11 +326,25 @@ class Pipe:
 
                 model_name = model.get("name", model_id)
                 prefix = self.valves.MODEL_PREFIX or ""
-                models.append({"id": model_id, "name": f"{prefix}{model_name}"})
+
+                # Add pricing information if enabled
+                pricing_info = ""
+                if self.valves.SHOW_PRICING:
+                    pricing_info = _format_pricing(model)
+
+                formatted_name = f"{prefix}{model_name}{pricing_info}"
+                models.append({"id": model_id, "name": formatted_name})
 
             if not models:
                 if self.valves.FREE_ONLY:
                     return [{"id": "error", "name": "Pipe Error: No free models found"}]
+                elif whitelist_models:
+                    return [
+                        {
+                            "id": "error",
+                            "name": "Pipe Error: No models found matching the whitelist",
+                        }
+                    ]
                 elif target_providers:
                     return [
                         {
@@ -249,6 +408,19 @@ class Pipe:
             if "model" in payload and payload["model"] and "." in payload["model"]:
                 payload["model"] = payload["model"].split(".", 1)[1]
 
+            # --- Process effort detection from message ---
+            effort_level = self.valves.REASONING_EFFORT.lower()
+            effort_notification = ""
+
+            if self.valves.INCLUDE_REASONING and "messages" in payload:
+                effort_level, effort_notification = _process_effort_from_message(
+                    payload["messages"], effort_level
+                )
+
+            # Store effort notification for response formatting
+            self._effort_notification = effort_notification
+            # --- End effort detection ---
+
             # --- Apply Cache Control Logic ---
             if self.valves.ENABLE_CACHE_CONTROL and "messages" in payload:
                 try:
@@ -295,8 +467,19 @@ class Pipe:
                     traceback.print_exc()
             # --- End Cache Control Logic ---
 
+            # --- Apply Reasoning Logic ---
             if self.valves.INCLUDE_REASONING:
-                payload["include_reasoning"] = True
+                # Validate reasoning effort level
+                valid_efforts = ["high", "medium", "low"]
+                if effort_level not in valid_efforts:
+                    print(
+                        f"Warning: Invalid reasoning effort '{effort_level}', defaulting to 'medium'"
+                    )
+                    effort_level = "medium"
+
+                # Add reasoning configuration to payload
+                payload["reasoning"] = {"effort": effort_level}
+            # --- End Reasoning Logic ---
 
             headers = {
                 "Authorization": f"Bearer {self.valves.OPENROUTER_API_KEY}",
@@ -357,6 +540,12 @@ class Pipe:
             citation_list = citation_formatter(citations)
 
             final = ""
+
+            # Add effort notification if present
+            effort_notification = getattr(self, "_effort_notification", "")
+            if effort_notification:
+                final += effort_notification
+
             if reasoning:
                 final += f"<think>\n{reasoning}\n</think>\n\n"
             if content:
@@ -395,6 +584,7 @@ class Pipe:
             buffer = ""
             in_think = False
             latest_citations: List[str] = []
+            first_chunk = True
 
             for line in response.iter_lines():
                 if not line or not line.startswith(b"data: "):
@@ -415,6 +605,13 @@ class Pipe:
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
                     reasoning = delta.get("reasoning", "")
+
+                    # Add effort notification at the beginning
+                    if first_chunk:
+                        effort_notification = getattr(self, "_effort_notification", "")
+                        if effort_notification:
+                            yield effort_notification
+                        first_chunk = False
 
                     # reasoning
                     if reasoning:
