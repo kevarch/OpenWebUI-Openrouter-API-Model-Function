@@ -236,6 +236,10 @@ class Pipe:
             default=None,
             description="Comma-separated list of specific model IDs to include. If set, only these models will be available. Leave empty to use provider filtering instead.",
         )
+        MODEL_PROVIDER_BLACKLIST: Optional[str] = Field(
+            default=None,
+            description="Model-specific provider blacklist in format 'model1:provider1,provider2;model2:provider3'. Example: 'gpt-4:openai;claude:anthropic,aws' would exclude OpenAI's GPT-4 and Anthropic/AWS versions of Claude models.",
+        )
         ENABLE_CACHE_CONTROL: bool = Field(
             default=False,
             description="Enable OpenRouter prompt caching by adding 'cache_control' to potentially large message parts. May reduce costs for supported models (e.g., Anthropic, Gemini) on subsequent calls with the same cached prefix. See OpenRouter docs for details.",
@@ -296,6 +300,8 @@ class Pipe:
             }
             # --- End Filtering Logic ---
 
+
+
             for model in raw_models_data:
                 model_id = model.get("id")
                 if not model_id:
@@ -334,6 +340,8 @@ class Pipe:
 
                 formatted_name = f"{prefix}{model_name}{pricing_info}"
                 models.append({"id": model_id, "name": formatted_name})
+
+
 
             if not models:
                 if self.valves.FREE_ONLY:
@@ -481,6 +489,56 @@ class Pipe:
                 payload["reasoning"] = {"effort": effort_level}
             # --- End Reasoning Logic ---
 
+            # --- Apply Model-Specific Provider Blacklist ---
+            blacklist_notification = ""
+            if self.valves.MODEL_PROVIDER_BLACKLIST and "model" in payload:
+                model_id = payload["model"]
+                blacklist_str = self.valves.MODEL_PROVIDER_BLACKLIST.strip()
+                ignored_providers = []
+                
+                try:
+                    # Parse format: 'model1:provider1,provider2;model2:provider3'
+                    for model_rule in blacklist_str.split(';'):
+                        if ':' in model_rule:
+                            model_pattern, providers_str = model_rule.split(':', 1)
+                            model_pattern = model_pattern.strip().lower()
+                            
+                            # Check if current model matches the pattern
+                            model_name_part = (
+                                model_id.split("/", 1)[1].lower()
+                                if "/" in model_id
+                                else model_id.lower()
+                            )
+                            
+                            # Support partial matching for model names
+                            if model_pattern in model_name_part or model_pattern in model_id.lower():
+                                providers = [
+                                    p.strip().lower() 
+                                    for p in providers_str.split(',') 
+                                    if p.strip()
+                                ]
+                                ignored_providers.extend(providers)
+                
+                    # Apply provider blacklist to request if any providers should be ignored
+                    if ignored_providers:
+                        # Remove duplicates while preserving order
+                        ignored_providers = list(dict.fromkeys(ignored_providers))
+                        
+                        # Add provider object to payload
+                        if "provider" not in payload:
+                            payload["provider"] = {}
+                        payload["provider"]["ignore"] = ignored_providers
+                        
+                        # Create notification
+                        blacklist_notification = f"> *Ignoring providers for {model_id}: {', '.join(ignored_providers)}*\n\n"
+                        
+                except Exception as e:
+                    print(f"Warning: Error applying MODEL_PROVIDER_BLACKLIST: {e}")
+            
+            # Store blacklist notification for response formatting
+            self._blacklist_notification = blacklist_notification
+            # --- End Model-Specific Provider Blacklist ---
+
             headers = {
                 "Authorization": f"Bearer {self.valves.OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
@@ -545,6 +603,11 @@ class Pipe:
             effort_notification = getattr(self, "_effort_notification", "")
             if effort_notification:
                 final += effort_notification
+
+            # Add blacklist notification if present
+            blacklist_notification = getattr(self, "_blacklist_notification", "")
+            if blacklist_notification:
+                final += blacklist_notification
 
             if reasoning:
                 final += f"<think>\n{reasoning}\n</think>\n\n"
@@ -611,6 +674,12 @@ class Pipe:
                         effort_notification = getattr(self, "_effort_notification", "")
                         if effort_notification:
                             yield effort_notification
+                        
+                        # Add blacklist notification if present
+                        blacklist_notification = getattr(self, "_blacklist_notification", "")
+                        if blacklist_notification:
+                            yield blacklist_notification
+                        
                         first_chunk = False
 
                     # reasoning
