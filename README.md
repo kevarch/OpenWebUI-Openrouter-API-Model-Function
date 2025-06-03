@@ -31,6 +31,7 @@ Getting started with OpenRouter is straightforward: simply sign up on their webs
 *   **Error Handling:** Provides informative error messages in the UI for common issues like invalid API keys, network timeouts, or API errors.
 *   **Optional Prompt Caching:** Allows enabling OpenRouter's prompt caching feature (`cache_control`), potentially reducing costs for supported models on repeated requests with similar initial prompts.
 *   **Optional Model Providers (`MODEL_PROVIDERS`):** This parameter accepts a comma-separated list of providers to include or exclude and is optional for more flexible setup.
+*   **Per-Model Provider Blacklist (`MODEL_PROVIDER_BLACKLIST`):** Allows you to exclude specific providers for certain models. See Configuration for details.
 
 ## Installation
 
@@ -59,6 +60,7 @@ The following settings can be configured via the OpenWebUI Pipe settings interfa
 *   **`MODEL_PROVIDERS`** (Optional): Comma-separated list of model providers to include or exclude. Leave empty to include all providers.
 *   **`INVERT_PROVIDER_LIST`**: If true, the 'Model Providers' list becomes an *exclude* list instead of an *include* list.
 *   **`MODEL_WHITELIST`** (Optional): Comma-separated list of specific model IDs (e.g., `anthropic/claude-3-sonnet,openai/gpt-4`). If set, only these models will be available, overriding provider filtering.
+*   **`MODEL_PROVIDER_BLACKLIST`** (Optional): Allows you to exclude specific providers for certain models. Format: `'model1:provider1,provider2;model2:provider3'`. For example, `'gpt-4:openai;claude:anthropic,aws'` will exclude OpenAI's GPT-4 and Anthropic/AWS versions of Claude models. This is useful if you want to avoid certain providers for specific models. Leave empty to disable this filter.
 *   **`ENABLE_CACHE_CONTROL`** (Default: `False`): If true, enables OpenRouter's prompt caching, potentially reducing costs for supported models on repeated requests with similar initial prompts and repeated context.
 *   **`FREE_ONLY`** (Optional, Default: `False`): If true, filters to show only free models.
 *   **`SHOW_PRICING`** (Optional, Default: `True`): If true, displays pricing information (input, output, total cost per 1M tokens) in the model names.
