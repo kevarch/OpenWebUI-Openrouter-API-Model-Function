@@ -1,6 +1,6 @@
 """
 title: OpenRouter Integration for OpenWebUI
-version: 0.4.1
+version: 0.4.4
 description: Integration with OpenRouter for OpenWebUI with Free Model Filtering and optional field improvements
 author: kevarch
 author_url: https://github.com/kevarch
@@ -9,6 +9,11 @@ credits: rburmorrison (https://github.com/rburmorrison), Google Gemini Pro 2.5, 
 license: MIT
 
 Changelog:
+- Version 0.4.4:
+  * Contribution by Scythe Eden
+  * Added SHOW_USAGE_STATS parameter to display token usage and cost information at the end of responses.
+  * Implemented usage statistics tracking for both streaming and non-streaming modes.
+  * Added formatted display showing input, reasoning, output tokens and total cost in dollars.
 - Version 0.4.3:
   * Contribution by Scythe Eden
   * Added MODEL_PROVIDER_BLACKLIST parameter and logic to filter models by specific model IDs.
@@ -202,6 +207,41 @@ def _process_effort_from_message(
     return default_effort, ""
 
 
+# --- Helper function for usage statistics formatting ---
+def _format_usage_stats(usage_data: dict) -> str:
+    """
+    Format usage statistics from OpenRouter API response.
+
+    Args:
+        usage_data: Usage data from API response
+
+    Returns:
+        Formatted usage statistics string
+    """
+    if not usage_data:
+        return ""
+
+    try:
+        prompt_tokens = usage_data.get("prompt_tokens", 0)
+        completion_tokens = usage_data.get("completion_tokens", 0)
+        
+        # Extract reasoning tokens from completion_tokens_details
+        completion_details = usage_data.get("completion_tokens_details", {})
+        reasoning_tokens = completion_details.get("reasoning_tokens", 0)
+        
+        # Calculate actual output tokens (completion - reasoning)
+        output_tokens = completion_tokens - reasoning_tokens
+        
+        # Cost is in credits, convert to dollars (1000 credits = $1)
+        cost = usage_data.get("cost", 0)
+
+        return f"\n\n---\n**Usage:** {prompt_tokens}, {reasoning_tokens}, {output_tokens}, ${cost:.4f}"
+
+    except (TypeError, ValueError, KeyError) as e:
+        print(f"Error formatting usage statistics: {e}")
+        return ""
+
+
 # --- Main Pipe class ---
 class Pipe:
     class Valves(BaseModel):
@@ -254,6 +294,10 @@ class Pipe:
         SHOW_PRICING: bool = Field(
             default=True,
             description="If true, show pricing information in model names (per 1M tokens).",
+        )
+        SHOW_USAGE_STATS: bool = Field(
+            default=False,
+            description="If true, show usage statistics (input, reasoning, output tokens and cost) at the end of each response.",
         )
 
     def __init__(self):
@@ -492,6 +536,11 @@ class Pipe:
                 payload["reasoning"] = {"effort": effort_level}
             # --- End Reasoning Logic ---
 
+            # --- Apply Usage Tracking ---
+            if self.valves.SHOW_USAGE_STATS:
+                payload["usage"] = {"include": True}
+            # --- End Usage Tracking ---
+
             # --- Apply Model-Specific Provider Blacklist ---
             blacklist_notification = ""
             if self.valves.MODEL_PROVIDER_BLACKLIST and "model" in payload:
@@ -592,6 +641,7 @@ class Pipe:
             choice = res["choices"][0]
             message = choice.get("message", {})
             citations = res.get("citations", [])
+            usage = res.get("usage", {})
 
             content = message.get("content", "")
             reasoning = message.get("reasoning", "")
@@ -599,6 +649,7 @@ class Pipe:
             content = citation_inserter(content, citations)
             reasoning = citation_inserter(reasoning, citations)
             citation_list = citation_formatter(citations)
+            usage_stats = _format_usage_stats(usage) if self.valves.SHOW_USAGE_STATS else ""
 
             final = ""
 
@@ -618,6 +669,7 @@ class Pipe:
                 final += content
             if final:
                 final += citation_list
+                final += usage_stats
             return final
 
         except requests.exceptions.Timeout:
@@ -650,9 +702,10 @@ class Pipe:
             buffer = ""
             in_think = False
             latest_citations: List[str] = []
+            latest_usage = {}
             first_chunk = True
 
-            for line in response.iter_lines():
+            for line in response.iter_lines(chunk_size=1024):
                 if not line or not line.startswith(b"data: "):
                     continue
                 data = line[len(b"data: ") :].decode("utf-8")
@@ -668,6 +721,12 @@ class Pipe:
                     citations = chunk.get("citations")
                     if citations is not None:
                         latest_citations = citations
+                    
+                    # Track usage information
+                    usage = chunk.get("usage")
+                    if usage is not None:
+                        latest_usage = usage
+                    
                     delta = choice.get("delta", {})
                     content = delta.get("content", "")
                     reasoning = delta.get("reasoning", "")
@@ -704,11 +763,18 @@ class Pipe:
                             yield "\n</think>\n\n"
                             in_think = False
                         buffer += content
+                        
+                    yield content
 
             # flush buffer
             if buffer:
                 yield citation_inserter(buffer, latest_citations)
             yield citation_formatter(latest_citations)
+            
+            # Add usage statistics if enabled
+            if self.valves.SHOW_USAGE_STATS and latest_usage:
+                print(f"Usage stats: {latest_usage}")
+                yield _format_usage_stats(latest_usage)
 
         except requests.exceptions.Timeout:
             yield f"Pipe Error: Request timed out ({timeout}s)"
